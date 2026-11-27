@@ -220,3 +220,158 @@ func TestLengthFunctionMatchesMethod(t *testing.T) {
 		}
 	}
 }
+
+func straightLine2() T {
+	return T{
+		A: PointTangent{
+			Point:   vec2.T{0.0, 0.0},
+			Tangent: vec2.T{2.0, 0.0},
+		},
+		B: PointTangent{
+			Point:   vec2.T{2.0, 0.0},
+			Tangent: vec2.T{2.0, 0.0},
+		},
+	}
+}
+
+func curved2() T {
+	return T{
+		A: PointTangent{
+			Point:   vec2.T{0.0, 0.0},
+			Tangent: vec2.T{1.0, 2.0},
+		},
+		B: PointTangent{
+			Point:   vec2.T{3.0, 1.0},
+			Tangent: vec2.T{-1.0, 0.5},
+		},
+	}
+}
+
+func TestLengthStraightLineExactValues(t *testing.T) {
+	herm := straightLine2()
+
+	if got := herm.Length(0.5); math.Abs(got-1.0) > 1e-9 {
+		t.Errorf("Length(0.5) = %v, want 1", got)
+	}
+	if got := herm.Length(1.0); math.Abs(got-2.0) > 1e-9 {
+		t.Errorf("Length(1) = %v, want 2", got)
+	}
+	if got := herm.Length(0.0); got != 0 {
+		t.Errorf("Length(0) = %v, want 0", got)
+	}
+	if tan := herm.Tangent(0.5); math.Abs(tan[0]-2.0) > 1e-12 || math.Abs(tan[1]) > 1e-12 {
+		t.Errorf("Tangent(0.5) = %v, want (2,0)", tan)
+	}
+}
+
+func TestTangentIsCurveDerivative(t *testing.T) {
+	herm := curved2()
+
+	if got := herm.Tangent(0.0); got != herm.A.Tangent {
+		t.Errorf("Tangent(0) = %v, want A.Tangent %v", got, herm.A.Tangent)
+	}
+	if got := herm.Tangent(1.0); got != herm.B.Tangent {
+		t.Errorf("Tangent(1) = %v, want B.Tangent %v", got, herm.B.Tangent)
+	}
+
+	const h = 1e-6
+	for _, tv := range []float64{0.2, 0.45, 0.5, 0.75} {
+		lo := herm.Point(tv - h)
+		hi := herm.Point(tv + h)
+		var numeric vec2.T
+		for i := 0; i < 2; i++ {
+			numeric[i] = (hi[i] - lo[i]) / (2 * h)
+		}
+		got := herm.Tangent(tv)
+		for i := 0; i < 2; i++ {
+			if math.Abs(got[i]-numeric[i]) > 1e-6 {
+				t.Errorf("Tangent(%v)[%d] = %v, numerical derivative %v", tv, i, got[i], numeric[i])
+			}
+		}
+	}
+}
+
+func TestLengthNonStraight(t *testing.T) {
+	herm := curved2()
+
+	const samples = 1000000
+	ref := 0.0
+	prev := herm.Point(0)
+	for i := 1; i <= samples; i++ {
+		cur := herm.Point(float64(i) / samples)
+		var seg vec2.T
+		for d := 0; d < 2; d++ {
+			seg[d] = cur[d] - prev[d]
+		}
+		ref += seg.Length()
+		prev = cur
+	}
+	if got := herm.Length(1.0); math.Abs(got-ref) > 1e-8*ref {
+		t.Errorf("Length(1) = %v, reference arc length %v", got, ref)
+	}
+
+	last := 0.0
+	for i := 0; i <= 2000; i++ {
+		l := herm.Length(float64(i) / 2000)
+		if l < last {
+			t.Fatalf("Length is not monotone at t=%v: %v < %v", float64(i)/2000, l, last)
+		}
+		last = l
+	}
+}
+
+func TestLengthDegenerateCurve(t *testing.T) {
+	var herm T
+	if got := herm.Length(0.5); got != 0 {
+		t.Errorf("degenerate Length(0.5) = %v, want 0", got)
+	}
+	if tan := herm.Tangent(0.5); tan != (vec2.T{}) {
+		t.Errorf("degenerate Tangent(0.5) = %v, want zero", tan)
+	}
+}
+
+func TestLengthDomainAndNaN(t *testing.T) {
+	herm := curved2()
+	total := herm.Length(1.0)
+
+	if got := herm.Length(-0.5); got != 0 {
+		t.Errorf("Length(-0.5) = %v, want 0", got)
+	}
+	if got := herm.Length(1.5); math.Abs(got-total) > 1e-9 {
+		t.Errorf("Length(1.5) = %v, want clamped total %v", got, total)
+	}
+	if got := herm.Length(math.NaN()); !math.IsNaN(got) {
+		t.Errorf("Length(NaN) = %v, want NaN", got)
+	}
+	if got := herm.Tangent(math.NaN()); !math.IsNaN(got[0]) {
+		t.Errorf("Tangent(NaN) = %v, want NaN", got)
+	}
+	if got := herm.Tangent(math.Inf(1)); !math.IsNaN(got[0]) {
+		t.Errorf("Tangent(+Inf) = %v, want NaN", got)
+	}
+}
+
+func TestNonFiniteControls(t *testing.T) {
+	nan := math.NaN()
+	inf := math.Inf(1)
+	finite := straightLine2()
+
+	cases := []struct {
+		name string
+		make func() T
+	}{
+		{"NaN pointA", func() T { h := finite; h.A.Point[1] = nan; return h }},
+		{"NaN tangentA", func() T { h := finite; h.A.Tangent[1] = nan; return h }},
+		{"Inf tangentB", func() T { h := finite; h.B.Tangent[1] = inf; return h }},
+		{"Inf pointB", func() T { h := finite; h.B.Point[0] = inf; return h }},
+	}
+	for _, c := range cases {
+		herm := c.make()
+		if got := herm.Length(0.5); !math.IsNaN(got) {
+			t.Errorf("%s: Length(0.5) = %v, want NaN", c.name, got)
+		}
+		if got := herm.Tangent(0.5); !math.IsNaN(got[0]) {
+			t.Errorf("%s: Tangent(0.5) = %v, want NaN", c.name, got)
+		}
+	}
+}

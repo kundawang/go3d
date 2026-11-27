@@ -4,6 +4,8 @@ package hermit2
 
 import (
 	"fmt"
+	"math"
+
 	"github.com/ungerik/go3d/float64/vec2"
 )
 
@@ -44,12 +46,20 @@ func (herm *T) Point(t float64) vec2.T {
 	return Point(&herm.A.Point, &herm.A.Tangent, &herm.B.Point, &herm.B.Tangent, t)
 }
 
-// Tangent returns a tangent on a hermit spline at t (0,1).
+// Tangent returns the derivative dPoint/dt of the hermit spline at t (0,1).
+// The result is not normalized; its length is the curve speed at t.
+// At t=0 it equals A.Tangent and at t=1 it equals B.Tangent, as defined by the
+// cubic Hermite basis. If any of the four control vectors is not finite,
+// Tangent returns a vector with all components set to NaN.
 func (herm *T) Tangent(t float64) vec2.T {
 	return Tangent(&herm.A.Point, &herm.A.Tangent, &herm.B.Point, &herm.B.Tangent, t)
 }
 
-// Length returns the length of a hermit spline from A.Point to t (0,1).
+// Length returns the arc length of the hermit spline from t=0 to t.
+// The result is non-negative and non-decreasing in t. Values of t outside
+// (0,1) are clamped to the spline domain [0,1], and a NaN t yields NaN.
+// If any of the four control vectors is not finite, Length returns NaN.
+// A curve whose derivative is identically zero has length zero.
 func (herm *T) Length(t float64) float64 {
 	return Length(&herm.A.Point, &herm.A.Tangent, &herm.B.Point, &herm.B.Tangent, t)
 }
@@ -77,50 +87,139 @@ func Point(pointA, tangentA, pointB, tangentB *vec2.T, t float64) vec2.T {
 	return result
 }
 
-// Tangent returns a tangent on a hermit spline at t (0,1).
+// Tangent returns the derivative dPoint/dt of the cubic Hermite spline at t.
+// The result is not normalized: its length is the speed of the curve at t.
+// By construction Tangent(0) equals tangentA and Tangent(1) equals tangentB.
+// Values of t outside [0,1] extrapolate the cubic polynomial, matching Point.
+// If any control vector is not finite, or t is NaN, the result is all NaN.
 func Tangent(pointA, tangentA, pointB, tangentB *vec2.T, t float64) vec2.T {
+	if !finiteControls2(pointA, tangentA, pointB, tangentB) || !isFinite(t) {
+		nan := math.NaN()
+		return vec2.T{nan, nan}
+	}
+
 	t2 := t * t
-	t3 := t2 * t
 
-	f := 2*t3 - 3*t2
-	result := pointA.Scaled(f)
+	// Derivatives of the cubic Hermite basis functions:
+	// h00 = 2t^3 - 3t^2 + 1, h10 = t^3 - 2t^2 + t,
+	// h01 = -2t^3 + 3t^2,    h11 = t^3 - t^2.
+	d00 := 6*t2 - 6*t
+	d10 := 3*t2 - 4*t + 1
+	d01 := -6*t2 + 6*t
+	d11 := 3*t2 - 2*t
 
-	f = t3 - 2*t2 + 1
-	tAf := tangentA.Scaled(f)
-	result.Add(&tAf)
-
-	f = t3 - t2
-	tBf := tangentB.Scaled(f)
-	result.Add(&tBf)
-
-	f = -2*t3 + 3*t2
-	pAf := pointB.Scaled(f)
-	result.Add(&pAf)
-
+	var result vec2.T
+	for i := 0; i < 2; i++ {
+		result[i] = pointA[i]*d00 + tangentA[i]*d10 +
+			tangentB[i]*d11 + pointB[i]*d01
+	}
 	return result
 }
 
-// Length returns the length of a hermit spline from pointA to t (0,1).
+// Length returns the arc length of the cubic Hermite spline from t=0 to t.
+// The result is non-negative and non-decreasing in t: values of t <= 0 give 0,
+// values of t > 1 are clamped to 1, and a NaN t gives NaN. Curves whose
+// derivative vanishes everywhere have length 0.
+//
+// The integral of |dPoint/dt| is evaluated with adaptive Simpson quadrature,
+// so the result is not limited by a fixed sampling resolution.
+// If any control vector is not finite, the result is NaN.
 func Length(pointA, tangentA, pointB, tangentB *vec2.T, t float64) float64 {
-	sqrT := t * t
-	t1 := sqrT * 0.5
-	t2 := sqrT * t * 1.0 / 3.0
-	t3 := sqrT*sqrT + 1.0/4.0
+	if !finiteControls2(pointA, tangentA, pointB, tangentB) || !isFinite(t) {
+		return math.NaN()
+	}
 
-	f := 2*t3 - 3*t2 + t
-	result := pointA.Scaled(f)
+	if t <= 0 {
+		return 0
+	}
+	if t > 1 {
+		t = 1
+	}
 
-	f = t3 - 2*t2 + t1
-	tAf := tangentA.Scaled(f)
-	result.Add(&tAf)
+	speed := func(x float64) float64 {
+		return speed2(pointA, tangentA, pointB, tangentB, x)
+	}
+	scale := 1 + curveScale2(pointA, tangentA, pointB, tangentB)
+	return adaptiveSimpson(speed, 0, t, arcLengthTolerance*scale)
+}
 
-	f = t3 - t2
-	tBf := tangentB.Scaled(f)
-	result.Add(&tBf)
+// speed2 returns |dPoint/dt| at t for a 2D cubic Hermite spline.
+func speed2(pointA, tangentA, pointB, tangentB *vec2.T, t float64) float64 {
+	t2 := t * t
+	d00 := 6*t2 - 6*t
+	d10 := 3*t2 - 4*t + 1
+	d01 := -6*t2 + 6*t
+	d11 := 3*t2 - 2*t
 
-	f = -2*t3 + 3*t2
-	pBf := pointB.Scaled(f)
-	result.Add(&pBf)
+	dx := pointA[0]*d00 + tangentA[0]*d10 + tangentB[0]*d11 + pointB[0]*d01
+	dy := pointA[1]*d00 + tangentA[1]*d10 + tangentB[1]*d11 + pointB[1]*d01
 
-	return result.Length()
+	return math.Hypot(dx, dy)
+}
+
+// curveScale2 returns a characteristic magnitude of the control data,
+// used to scale the absolute quadrature tolerance.
+func curveScale2(pointA, tangentA, pointB, tangentB *vec2.T) float64 {
+	return math.Hypot(pointA[0], pointA[1]) +
+		math.Hypot(tangentA[0], tangentA[1]) +
+		math.Hypot(tangentB[0], tangentB[1]) +
+		math.Hypot(pointB[0], pointB[1])
+}
+
+// finiteControls2 reports whether every component of the control vectors
+// is finite (neither NaN nor infinity).
+func finiteControls2(pointA, tangentA, pointB, tangentB *vec2.T) bool {
+	return finiteVec2(pointA) && finiteVec2(tangentA) &&
+		finiteVec2(pointB) && finiteVec2(tangentB)
+}
+
+func finiteVec2(v *vec2.T) bool {
+	for i := 0; i < 2; i++ {
+		if math.IsNaN(v[i]) || math.IsInf(v[i], 0) {
+			return false
+		}
+	}
+	return true
+}
+
+// isFinite reports whether f is neither NaN nor an infinity.
+func isFinite(f float64) bool {
+	return !math.IsNaN(f) && !math.IsInf(f, 0)
+}
+
+// arcLengthTolerance is the relative accuracy target of the adaptive
+// quadrature, kept tight so that Length stays monotone in t.
+const arcLengthTolerance = 1e-13
+
+// maxSimpsonDepth bounds the adaptive subdivision, guaranteeing termination
+// even for curves with cusps where the speed is not differentiable.
+const maxSimpsonDepth = 40
+
+// adaptiveSimpson integrates f over [a,b] to absolute accuracy eps.
+func adaptiveSimpson(f func(float64) float64, a, b, eps float64) float64 {
+	if b <= a {
+		return 0
+	}
+	m := 0.5 * (a + b)
+	fa, fm, fb := f(a), f(m), f(b)
+	return simpsonStep(f, a, b, fa, fm, fb, eps, maxSimpsonDepth)
+}
+
+func simpsonStep(f func(float64) float64, a, b, fa, fm, fb, eps float64, depth int) float64 {
+	m := 0.5 * (a + b)
+	lm := 0.5 * (a + m)
+	rm := 0.5 * (m + b)
+	flm := f(lm)
+	frm := f(rm)
+
+	left := (m - a) / 6 * (fa + 4*flm + fm)
+	right := (b - m) / 6 * (fm + 4*frm + fb)
+	whole := (b - a) / 6 * (fa + 4*fm + fb)
+	delta := left + right - whole
+
+	if depth <= 0 || math.Abs(delta) <= 15*eps {
+		return left + right + delta/15
+	}
+	return simpsonStep(f, a, m, fa, flm, fm, eps/2, depth-1) +
+		simpsonStep(f, m, b, fm, frm, fb, eps/2, depth-1)
 }
