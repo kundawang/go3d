@@ -41,7 +41,8 @@ func TestDeterminant(t *testing.T) {
 		t.Errorf("Wrong determinant: %f", det)
 	}
 
-	scale2 := Ident.Scale(2)
+	scale2 := Ident
+	scale2.Scale(2)
 	if det := scale2.Determinant(); det != 2*2*2*1 {
 		t.Errorf("Wrong determinant: %f", det)
 	}

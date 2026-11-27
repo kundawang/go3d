@@ -197,7 +197,20 @@ proj.AssignOrthogonalProjection(left, right, bottom, top, znear, zfar)
 mvp := mat4.Ident
 mvp.AssignMul(&projection, &view)
 mvp.Mul(&model)
+
+// Project a world point to top-left origin viewport pixels.
+// screen.X/Y are pixel coordinates, screen.Z is depth in [0, 1].
+viewport := mat4.Viewport{X: 10, Y: 20, Width: 200, Height: 100}
+world := vec3.T{0, 0, -5}
+screen, ok := mat4.Project(&world, &view, &projection, viewport)
+
+// Unproject pixels and depth back to a world point.
+// ok is false for off-viewport pixels, singular matrices or invalid inputs.
+world, ok = mat4.Unproject(&screen, &view, &projection, viewport)
 ```
+
+`float64/mat4` provides the same `Project`, `Unproject` and `Viewport` API with
+identical semantics for `float64`.
 
 ### Quaternions
 
