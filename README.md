@@ -234,6 +234,16 @@ q3 := quaternion.Mul(&q1, &q2)  // Apply q2 first, then q1
 // Smooth interpolation
 halfway := quaternion.Slerp(&start, &end, 0.5)
 
+// Weighted average of several aiming constraints.
+// Order-independent and invariant to the q/-q representation of each input.
+poses := []quaternion.T{q1, q2, q3}
+weights := []float32{0.5, 0.25, 0.25}
+avg, err := quaternion.WeightedAverage(poses, weights)
+if err != nil {
+    // All weights zero, negative/non-finite input, empty slice, ...
+    log.Fatal(err)
+}
+
 // Convert to matrix
 var m mat4.T
 m.AssignQuaternion(&q)
