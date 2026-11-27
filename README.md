@@ -24,6 +24,26 @@ Example:
 	a := vec3.UnitX
 	b := a.Scaled(5) // a still equals vec3.UnitX
 
+Polygons can be clipped against an oriented plane, e.g. for a section plane
+or a user-defined cutaway. The plane keeps the positive side, and vertices
+and intersection points on the plane are kept. UV coordinates are optional
+and interpolated with the same edge parameter as the positions:
+
+	// Remove everything on the negative side of the plane x = 0.
+	plane := vec3.NewPlane(&vec3.T{0, 0, 0}, &vec3.T{1, 0, 0})
+	polygon := []vec3.T{{-1, -1, 0}, {1, -1, 0}, {1, 1, 0}, {-1, 1, 0}}
+	uvs := []vec2.T{{0, 0}, {1, 0}, {1, 1}, {0, 1}}
+	clipped, clippedUVs, ok := vec3.ClipPolygonUVs(polygon, uvs, &plane)
+	if !ok {
+		// Fewer than three vertices, or a degenerate/non-finite plane.
+	}
+	area := vec3.PolygonArea(clipped)
+
+	// Without UVs: vec3.ClipPolygon(polygon, &plane)
+
+`float64/vec3` provides the same `Plane`, `ClipPolygon`, `ClipPolygonUVs`
+and `PolygonArea` API with identical semantics for `float64`.
+
 
 Note that the package is designed for performance over usability where necessary.
 This is the reason why many arguments are passed by pointer reference instead of by value.
